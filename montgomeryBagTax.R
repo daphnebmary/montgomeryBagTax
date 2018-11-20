@@ -12,7 +12,7 @@ library(ggplot2)
 library(reshape2)
 library(lubridate)
 
-#1. Read populatin csv file. Fit population vs time linear model .
+#1. Read populatin csv file.
 pop <- read.table("population.txt", sep="\t", header=TRUE)
 
 popPlot <- ggplot(data = pop, aes(x = year, y = population/(1*10^6))) +
@@ -29,15 +29,18 @@ zip <- read.delim("zipcodes.txt")
 
 #3. Read Montgomery County Bag Tax file. Remove unused columns and rename columns
 dat = read.csv("Bag_Tax.csv", stringsAsFactors=FALSE)
-dat = subset(dat, select = c("Account","Date.From","Date.To","Bag.Count","Vendor.Name","City","State","Zip.code"))
-names(dat) <- c("id","from","to","bagCount","vendorName","city","state","zipCode")
+dat = subset(dat, select = c("Account","Date.From","Date.To","Create.Date","Bag.Count","Vendor.Name","City","State","Zip.code"))
+names(dat) <- c("id","from","to","created","bagCount","vendorName","city","state","zipCode")
 
-#Removing all data where from.date > to last.date
+#Reformatting date columns from text to Date objects
 dat$from = as.Date(dat$from, format="%m/%d/%Y")
 dat$to = as.Date(dat$to, format = "%m/%d/%Y")
-dat <- subset(dat,to > from)
+dat$created = as.Date(dat$created, format = "%m/%d/%Y")
 
-#Removing all data with incorrect Dates
+#Removing all data with incorrect Dates 
+#Removing all data where from date is after to date
+dat <- subset(dat,to > from)
+#Removing all data not bound by legislation date and date of last update of data
 legislationDate = as.Date("5/3/2011",format = "%m/%d/%Y")
 dataUpdateDate = as.Date("9/9/2018",format = "%m/%d/%Y")
 dat <- subset(dat, from >= legislationDate)
@@ -66,28 +69,30 @@ confetti <- ggplot(dat, aes(x=from, y=bagCount,colour = location)) +
   theme_bw() 
 confetti
 
+#Read months file
 months = read.delim("months.txt")
 months$firstDay = as.Date(months$firstDay, format = "%m/%d/%Y")
 months$lastDay = as.Date(months$lastDay, format = "%m/%d/%Y")
 
+#initiate months columns. 
 months$bagCount = 0;
 months$localCount = 0;
 months$semiLocalCount = 0;
 months$nonlocalCount = 0;
 
-#Proportion out bagCount to months
-#Come back to these loops more efficient.
+#Proportion out bagCount into months
+#Come back to make these loops more efficient.
 fraction = 0
 start_time <- Sys.time()
 for (row in 1:nrow(months)) {
   a <- as.numeric(months[row, "firstDay"])
   b <- as.numeric(months[row, "lastDay"])
-
+  
   for (row2 in 1:nrow(dat)){
     c <- as.numeric(dat[row2, "from"])
     d <- as.numeric(dat[row2, "to"])
     count = dat[row2,"bagCount"]
-
+    
     if (d<a | b<c){ # order c d a b or a b c d
       next
     }
@@ -103,7 +108,7 @@ for (row in 1:nrow(months)) {
     else {                        #order c a b d 
       fraction = (b-a+1)/(d-c+1)
     }
-
+    
     if (dat[row2,"location"] == "Local"){
       months[row, "localCount"] = months[row, "localCount"] + fraction*count
     }
@@ -133,19 +138,17 @@ scatter
 
 ####
 oneLine <- ggplot(data = months, aes(x = firstDay, y = bagCount)) +
-  geom_point() +
+  geom_line() +
   xlab("Time") + ylab("Number of Bags Sold [Millions]") +
   theme_bw() 
 oneLine
-
-
 
 ####
 threeLines <- ggplot(data = months, aes(x =firstDay)) +
   geom_line(aes(y = localCount, colour = "Local")) +
   geom_line(aes(y = nonlocalCount, colour = "Non-Local")) +
   geom_line(aes(y = semiLocalCount, colour = "Semi-Local")) +
-
+  
   scale_colour_manual(breaks = c( "Local", "Semi-Local","Non-Local"),
                       values = c("#F8766D","#00BFCA","#000000")) +
   xlab("Year") + ylab("Number of Bags Sold [Millions]") +
@@ -158,6 +161,7 @@ threeLines
 months$month = months(months$firstDay)
 months$year = as.numeric(format(months$firstDay,"%Y"))
 months$month <- factor(months$month, levels=unique(months$month))
+#Compute the marketshare for non-local stores by percentage of bags sold
 months$nlMarketShare <- months$nonlocalCount/months$bagCount
 
 jaggedMonths <- ggplot(data = months, aes(x=month, y=bagCount, group=year), xlab="Month", ylab="Bags Sold (Millions)") +
@@ -168,6 +172,7 @@ jaggedMonths <- ggplot(data = months, aes(x=month, y=bagCount, group=year), xlab
   ylim(4,7) +
   theme_bw()+
   theme(axis.text.x = element_text(angle = 90,hjust = 1,vjust = 0.5)) 
+
 
 growthCurve <- ggplot(filter(months,year %in% c(2012:2017)), aes(x=year, y=bagCount, colour=month, group=month)) +
   geom_line(size = 1) + 
@@ -185,7 +190,6 @@ sinusoidal <- ggplot(months, aes(firstDay,nlMarketShare)) +
   xlab("Time") + ylab("Market Share")
 sinusoidal
 
-#Compress this code. You don't want two for loops!!!
 years = data.frame(yr = seq(2012,2017))
 years$bagCount = 0
 years$bagCount = sum(months$bagCount)
@@ -244,7 +248,7 @@ popLM <- ggplot(data = years, aes(x = pop/(1*10^6), y = bagCount)) +
 popLM
 ##
 
-#Residual Plot
+#Residual Plot. Not very informative of course - sparce data!
 resPlot <- ggplot(myears, aes(x=.fitted, y=.resid)) + 
   geom_point(aes(x=.fitted, y=.resid)) + 
   geom_hline(yintercept=0) + 
@@ -266,7 +270,7 @@ for (row in 1:nrow(vendors)){
 vendors <- vendors[order(-vendors$bagCount),]
 
 #Set order for plotting vendors bar graph
-vendors$name <- factor(vendor$name, levels = vendors$name[order(vendors$bagCount)])
+vendors$name <- factor(vendors$name, levels = vendors$name[order(vendors$bagCount)])
 
 vendorBar <- ggplot(data=head(vendors,30), aes(x=name, y=bagCount,fill = as.factor(location))) +
   geom_bar(stat = "identity") +
@@ -276,48 +280,33 @@ vendorBar <- ggplot(data=head(vendors,30), aes(x=name, y=bagCount,fill = as.fact
   labs(fill= "Store HQ Location") +
   theme_bw() 
 vendorBar
-###
-#dato is dat with the "open" date, hense the name dato
-dato = read.csv("Bag_Tax.csv", stringsAsFactors=FALSE)
-dato = subset(dato, select = c("Account","Date.From","Date.To","Create.Date","Bag.Count","Vendor.Name","City","State","Zip.code"))
-names(dato) <- c("id","from","to","created","bagCount","vendorName","city","state","zipCode")
+### This is where the code ends for Post 1.
 
-dato$from = as.Date(dato$from, format="%m/%d/%Y")
-dato$to = as.Date(dato$to, format = "%m/%d/%Y")
-dato$created = as.Date(dato$created, format = "%m/%d/%Y")
-dato$ellapsed = dato$created - dato$to
-
-#Removing all data where from.date > to last.date
-dato <- subset(dato,to > from)
-
-#Removing all data with incorrect Dates
-dato <- subset(dato, from >= legislationDate)
-dato <- subset(dato, to <= dataUpdateDate)
-dato <- subset(dato, ellapsed > 0)
-
-#wic for "what is created?!!"
-wic <- ggplot(data = dato, aes(x = to, y = created)) + 
+#wic for "what is create?"
+#Exploring if "created" is the date of creation of the vendor account, or the entry (row).
+#This plot shows that it's the latter, as the "to" date almost always precedes the "create" date
+wic <- ggplot(data = dat, aes(x = to, y = created)) + 
   geom_point() +
   theme_bw()
 wic
 
-dato <- dato[order(dato$from),] #dato for data, with open date
-#dato_r <- dato[order(-as.numeric(dato$from)),] #dato_r for reversed dato
+dat <- dat[order(dat$from),] 
+dat_r <- dat[order(-as.numeric(dat$from)),] #dat_r for dat_reversed
 
-uniqueID <- data.frame(id = unique(dato$id))
+uniqueID <- data.frame(id = unique(dat$id))
 
 for (row in 1:nrow(uniqueID)){
-identifier = uniqueID[row,"id"]
-uniqueID[row,"opened"] <- dato[match(identifier,dato$id),"from"]
-uniqueID[row,"last"] <- dato[match(identifier,dato_r$id),"to"]
-uniqueID[row,"name"] <- dato[match(identifier,dato_r$id),"vendorName"]
+  identifier = uniqueID[row,"id"]
+  uniqueID[row,"opened"] <- dat[match(identifier,dat$id),"from"]
+  uniqueID[row,"last"] <- dat[match(identifier,dat_r$id),"to"]
+  uniqueID[row,"name"] <- dat[match(identifier,dat_r$id),"vendorName"]
 }
 
 uniqueID <- uniqueID[order(uniqueID$opened),]
 uniqueID$N <- seq(1:nrow(uniqueID))
 cumulative <- ggplot(data = uniqueID) + 
-  geom_line(data = uniqueID, aes(x = opened, y = N), colour = "red") +
-  geom_line(data = uniqueID_r, aes(x = last, y = N), colour = "green")
+  geom_line(data = uniqueID, aes(x = opened, y = N), colour = "red")
+#geom_line(data = uniqueID_r, aes(x = last, y = N), colour = "green")
 cumulative
 
 uniqueID <- uniqueID[order(uniqueID$last),]
