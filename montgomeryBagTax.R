@@ -11,6 +11,7 @@ library(dplyr)
 library(ggplot2)
 library(reshape2)
 library(lubridate)
+library(mice)
 
 #1. Read populatin csv file.
 pop <- read.table("population.txt", sep="\t", header=TRUE)
@@ -37,10 +38,10 @@ dat$from = as.Date(dat$from, format="%m/%d/%Y")
 dat$to = as.Date(dat$to, format = "%m/%d/%Y")
 dat$created = as.Date(dat$created, format = "%m/%d/%Y")
 
-#Removing all data with incorrect Dates 
-#Removing all data where from date is after to date
+#Ignoring all data with incorrect Dates 
+#Ignoring all data where from date is after to date
 dat <- subset(dat,to > from)
-#Removing all data not bound by legislation date and date of last update of data
+#Ignoring all data not bound by legislation date and date of last update of data
 legislationDate = as.Date("5/3/2011",format = "%m/%d/%Y")
 dataUpdateDate = as.Date("9/9/2018",format = "%m/%d/%Y")
 dat <- subset(dat, from >= legislationDate)
@@ -120,30 +121,31 @@ for (row in 1:nrow(months)) {
     }
   }
 }
+
 months$bagCount = months$localCount + months$semiLocalCount+months$nonlocalCount
 end_time <- Sys.time()
 end_time-start_time
 
-#We'll do 2012 - 2018
+#For analysis, we'll do Jan 2012 - July 2018
 dayFirst = as.Date("2012-01-01")
 dayLast = as.Date("2018-06-01")
 months <- subset(months, firstDay >= dayFirst & firstDay <= dayLast )
 
-####
+#scatter plot of month with bags sold.
 scatter <- ggplot(data = months, aes(x =firstDay, y=bagCount)) +
   geom_point() +
   xlab("Time") + ylab("Number of Bags Sold [Millions]") +
   theme_bw() 
 scatter
 
-####
+#line plot of month vs bags sold. Looks like an EKG
 oneLine <- ggplot(data = months, aes(x = firstDay, y = bagCount)) +
   geom_line() +
   xlab("Time") + ylab("Number of Bags Sold [Millions]") +
   theme_bw() 
 oneLine
 
-####
+#line plot of month vs bags sold, by location. Looks like an ekg that goes flat.
 threeLines <- ggplot(data = months, aes(x =firstDay)) +
   geom_line(aes(y = localCount, colour = "Local")) +
   geom_line(aes(y = nonlocalCount, colour = "Non-Local")) +
@@ -152,7 +154,6 @@ threeLines <- ggplot(data = months, aes(x =firstDay)) +
   scale_colour_manual(breaks = c( "Local", "Semi-Local","Non-Local"),
                       values = c("#F8766D","#00BFCA","#000000")) +
   xlab("Year") + ylab("Number of Bags Sold [Millions]") +
-  theme(legend.title=NULL) +
   labs(colour = "Store HQ Location") +
   theme_bw() 
 threeLines
@@ -161,8 +162,6 @@ threeLines
 months$month = months(months$firstDay)
 months$year = as.numeric(format(months$firstDay,"%Y"))
 months$month <- factor(months$month, levels=unique(months$month))
-#Compute the marketshare for non-local stores by percentage of bags sold
-months$nlMarketShare <- months$nonlocalCount/months$bagCount
 
 jaggedMonths <- ggplot(data = months, aes(x=month, y=bagCount, group=year), xlab="Month", ylab="Bags Sold (Millions)") +
   geom_line(aes(color=year)) +
@@ -173,7 +172,6 @@ jaggedMonths <- ggplot(data = months, aes(x=month, y=bagCount, group=year), xlab
   theme_bw()+
   theme(axis.text.x = element_text(angle = 90,hjust = 1,vjust = 0.5)) 
 
-
 growthCurve <- ggplot(filter(months,year %in% c(2012:2017)), aes(x=year, y=bagCount, colour=month, group=month)) +
   geom_line(size = 1) + 
   xlab("Year") + ylab("") +
@@ -182,17 +180,25 @@ growthCurve <- ggplot(filter(months,year %in% c(2012:2017)), aes(x=year, y=bagCo
   theme_bw() 
 plot_grid(jaggedMonths, growthCurve, labels = "AUTO", align = "h")
 
+#Compute the marketshare for non-local stores by percentage of bags sold
+months$nlMarketShare <- months$nonlocalCount/months$bagCount
+
+#Plot non-local marketshare against time. 
 sinusoidal <- ggplot(months, aes(firstDay,nlMarketShare)) +
-  geom_point() +
-  geom_smooth(method = loess) +
+  geom_point(size = 1) +
+  geom_smooth(method = loess, se = FALSE, aes(color = "Loess")) +
+  geom_smooth(method = lm, formula = y~poly(x,3), se = FALSE, aes(color = "Cubic")) +
   scale_y_continuous(labels = scales::percent) +
+  labs(colour = "Model") +  
   theme_bw() + 
-  xlab("Time") + ylab("Market Share")
+  xlab("Time") + ylab("Non-Local Market Share")
 sinusoidal
+
+model <- lm(nlMarketShare ~ poly(as.numeric(firstDay),3) + month, data = months)
+summary(model)
 
 years = data.frame(yr = seq(2012,2017))
 years$bagCount = 0
-years$bagCount = sum(months$bagCount)
 for (row in 1:nrow(years)){
   annee = years[row,"yr"] #annee is French for "year" baby!
   years[row,"bagCount"] = sum(filter(months,year == annee)$bagCount)
@@ -201,19 +207,21 @@ for (row in 1:nrow(years)){
 years$pop = pop[3:nrow(pop),"population"]
 years$bagsPerCapita = years$bagCount/years$pop
 
+#Count the number of unique vendors in 
 for (row in 1:nrow(years)){
   year <- years[row,"yr"]
-  df <- subset(dat,as.numeric(format(from,"%Y")) == year | as.numeric(format(to,"%Y")) == year)
+  df <- subset(dat,as.numeric(format(from,"%Y")) == year | as.numeric(format(to,"%Y")) == year |(as.numeric(format(from,"%Y")) < year & as.numeric(format(to,"%Y"))>year))
   years[row,"nVendors"] = length(unique(df$id))
-  #max(sum(sapply(dat$from, function(x) grepl(year,x))),sum(sapply(dat$to, function(x) grepl(year,x))))
+  years[row,"nreports"] = nrow(df)
 }
+years
 
-for (row in 1:nrow(years_long)){
-  year <- years_long[row,"ye"]
-  df <- subset(dat,as.numeric(format(from,"%Y")) == year | as.numeric(format(to,"%Y")) == year)
-  years_long[row,"nVendors"] = length(unique(df$id))
-  #max(sum(sapply(dat$from, function(x) grepl(year,x))),sum(sapply(dat$to, function(x) grepl(year,x))))
-}
+# for (row in 1:nrow(years)){
+#   year <- years[row,"yr"]
+#   df <- subset(dat,as.numeric(format(from,"%Y")) == year | as.numeric(format(to,"%Y")) == year |(as.numeric(format(from,"%Y")) < year & as.numeric(format(to,"%Y"))>year))
+#   years_long[row,"nVendors"] = length(unique(df$id))
+#   #max(sum(sapply(dat$from, function(x) grepl(year,x))),sum(sapply(dat$to, function(x) grepl(year,x))))
+# }
 
 
 myears <- lm(bagCount ~ yr, data = years) 
@@ -298,23 +306,25 @@ uniqueID <- data.frame(id = unique(dat$id))
 for (row in 1:nrow(uniqueID)){
   identifier = uniqueID[row,"id"]
   uniqueID[row,"opened"] <- dat[match(identifier,dat$id),"from"]
-  uniqueID[row,"last"] <- dat[match(identifier,dat_r$id),"to"]
-  uniqueID[row,"name"] <- dat[match(identifier,dat_r$id),"vendorName"]
+  uniqueID[row,"last"] <- dat_r[match(identifier,dat_r$id),"to"]
+  uniqueID[row,"name"] <- dat[match(identifier,dat$id),"vendorName"]
+  uniqueID[row,"location"] <- dat[match(identifier,dat$id),"location"]
 }
 
 uniqueID <- uniqueID[order(uniqueID$opened),]
 uniqueID$N <- seq(1:nrow(uniqueID))
 cumulative <- ggplot(data = uniqueID) + 
-  geom_line(data = uniqueID, aes(x = opened, y = N), colour = "red")
-#geom_line(data = uniqueID_r, aes(x = last, y = N), colour = "green")
+  geom_line(data = uniqueID, aes(x = opened, y = N), colour = "darkorange") +
+  xlab("Time") + 
+  ylab("Cumulative Number of Stores") +
+  theme_bw()
 cumulative
 
-uniqueID <- uniqueID[order(uniqueID$last),]
+#hth for here's to hoping
+hth <- ggplot() + theme_bw() + 
+xlab("Time") + ylab("N")
 
-uniqueID_r <- uniqueID[order(as.numeric(uniqueID$last)),]
-uniqueID_r$N <- seq(1:nrow(uniqueID))
-attrition <- ggplot(data = uniqueID_r, aes(x = last, y = N)) + 
-  geom_point()
-#xlim(dayFirst,dayLast)
-attrition
-
+for (row in 1:nrow(uniqueID)){
+  hth <- hth + geom_segment(aes_string(x = uniqueID[row,"opened"], y = uniqueID[row,"N"], xend = uniqueID[row,"last"], yend = uniqueID[row,"N"]), alpha = 0.5)
+  }
+hth 
